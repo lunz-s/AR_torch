@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import json
 from skimage.transform import resize as imresize
+import random
 
 
 class fMRIData(Dataset):
@@ -40,7 +41,7 @@ class fMRIData(Dataset):
 class fMRIDataEval(fMRIData):
     def __init__(self, resolution=256, percentile=99,
                  directory='/store/CCIMI/sl767/fMRI/knee_mri_eval/individual_npy.json'):
-        super(fMRIData, self).__init__(resolution=resolution, percentile=percentile, directory=directory)
+        super(fMRIDataEval, self).__init__(resolution=resolution, percentile=percentile, directory=directory)
 
 
 class LUNA(Dataset):
@@ -67,6 +68,9 @@ class LUNA(Dataset):
 
         # Data preprocessing
         sample = np.maximum(sample, 0)
+        if not len(sample.shape) == 2:
+            print('Faulty sample', idx)
+            return self.__getitem__(random.randint(0, self.__len__()-1))
         sample = imresize(sample, (self.resolution, self.resolution), order=1)
         p = np.percentile(sample, self.percentile)
         sample[sample > p] = p
@@ -78,4 +82,4 @@ class LUNA(Dataset):
 class LUNAEval(LUNA):
     def __init__(self, resolution=256, percentile=99,
                  directory='/store/CCIMI/sl767/LUNA/Evaluation_Data/individual_npy.json'):
-        super(LUNA, self).__init__(resolution=resolution, percentile=percentile, directory=directory)
+        super(LUNAEval, self).__init__(resolution=resolution, percentile=percentile, directory=directory)

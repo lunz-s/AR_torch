@@ -3,8 +3,9 @@ import os
 import numpy as np
 from abc import abstractmethod
 from matplotlib import pyplot as plt
-from utils import fft2c, ifft2c, complex_abs, embed_tensor_complex
+from utils import fft2c, ifft2c, complex_abs, embed_tensor_complex, OperatorModule
 from torch.autograd import Variable
+import odl
 
 class Operator(object):
     def __init__(self, size):
@@ -22,38 +23,38 @@ class Operator(object):
 
     # Expect numpy array, return numpy array
     @abstractmethod
-    def forward(self, x, mask=True):
+    def forward(self, x, **kwargs):
         pass
 
     @abstractmethod
-    def adjoint(self, y, mask=True):
+    def adjoint(self, y, **kwargs):
         pass
 
     @abstractmethod
-    def inverse(self, y, mask=True):
+    def inverse(self, y, **kwargs):
         pass
 
     @abstractmethod
-    def add_noise(self, y, noise_level):
+    def add_noise(self, y, **kwargs):
         pass
 
     # Convenience batch wrapping for basic np methods.
-    def _forward_batch(self, x, mask=True):
+    def _forward_batch(self, x, **kwargs):
         res = np.zeros(shape=x.shape)
         for k in range(x.shape[0]):
-            res[k,0,...] = self.forward(x[k,0,...], mask=mask)
+            res[k,0,...] = self.forward(x[k,0,...], **kwargs)
         return res
 
-    def _adjoint_batch(self, y, mask=True):
+    def _adjoint_batch(self, y, **kwargs):
         res = np.zeros(shape=y.shape)
         for k in range(y.shape[0]):
-            res[k, 0, ...] = self.adjoint(y[k, 0, ...], mask=mask)
+            res[k, 0, ...] = self.adjoint(y[k, 0, ...], **kwargs)
         return res
 
-    def _inverse_batch(self, y, mask=True):
+    def _inverse_batch(self, y, **kwargs):
         res = np.zeros(shape=y.shape)
         for k in range(y.shape[0]):
-            res[k, 0, ...] = self.inverse(y[k, 0, ...], mask=mask)
+            res[k, 0, ...] = self.inverse(y[k, 0, ...], **kwargs)
         return res
 
     # Default methods to wrap python implementations in torch by looping. Can be overwritten with more efficient
@@ -84,7 +85,6 @@ class Operator(object):
         if np.iscomplexobj(res):
             res = self.complex_to_real(res)
         return torch.Tensor(res).cuda()
-    
 
 
 class MRI(Operator):
@@ -208,3 +208,69 @@ class MRI(Operator):
                     np.save(f, mask)
                 print('New sampling pattern created')
                 return mask
+
+
+class CT(Operator):
+
+    def __init__(self, size=256, n_angles=100):
+        '''
+        :param size: The size of image and measurement space
+        :param subsampling: The decay parameter for the Gaussian kernel in the sampling pattern.
+        A higher value corresponds to more measurements being taken.
+        :param n_directions: Setting this value changes the sampling pattern to a radial pattern with n_directions
+        sampling lines emerging from the origin. Ignores subsampling.
+        :param direcotry: Directory to read and write generated sampling patterns from and to.
+        '''
+        Operator.__init__(self, size)
+        self.n_angles = n_angles
+        space = odl.uniform_discr([-size // 2, -size // 2], [size // 2, size // 2], [size, size], dtype='float32')
+
+        geometry = odl.tomo.parallel_beam_geometry(space, num_angles=n_angles)
+        op = odl.tomo.RayTransform(space, geometry)
+
+        # Ensure operator has fixed operator norm for scale invariance
+        opnorm = odl.power_method_opnorm(op)
+        self.operator = (1 / opnorm) * op
+        self.fbp = opnorm * odl.tomo.fbp_op(op)
+        self.adjoint_operator = (1 / opnorm) * op.adjoint
+
+        # Wrap the operators as torch modules
+        self.operator_t = OperatorModule(self.operator)
+        self.fbp_t = OperatorModule(self.fbp)
+        self.adjoint_t = OperatorModule(self.adjoint)
+
+    def forward(self, x, **kwargs):
+        return self.operator(x).asarray()
+
+    def adjoint(self, y, **kwargs):
+        return self.adjoint_operator(y).asarray()
+
+    def inverse(self, y, **kwargs):
+        return self.fbp(y).asarray()
+
+    def add_noise(self, y, noise_level=2e-3):
+        '''
+        :param y: Measurements
+        :param noise_level: Noise Level
+        :return: Measurements corrupted with real valued Gaussian noise
+        '''
+        noise = (Variable(y.new(y.shape).normal_(0, 1)))
+        max_val = torch.abs(y).max()
+        return y + noise_level * max_val * noise
+
+    def forward_torch(self, x, **kwargs):
+        return self.operator_t(x)
+
+    def adjoint_torch(self, y, **kwargs):
+        return self.adjoint_t(y)
+
+    def inverse_torch(self, y, **kwargs):
+        return self.fbp_t(y)
+
+    def __repr__(self):
+        return f'CT Operator\nResolution {self.size}\nAngles: {self.n_angles}'
+
+    def __str__(self):
+        return f'CT Operator\nResolution {self.size}\nAngles: {self.n_angles}'
+
+

@@ -1,6 +1,8 @@
 import os
 import torch
-
+import numpy as np
+from odl import Operator
+from torch.autograd import Variable
 
 def mkdir(dir):
     try:
@@ -14,6 +16,35 @@ def embed_tensor_complex(sample):
     s = sample.unsqueeze(-1)
     zeros = s.new_zeros(size=s.size())
     return torch.cat([s, zeros], axis=-1)
+
+
+class Norm(object):
+    def __init__(self, s, c=1, size=256):
+        self.s = s
+        self.c = c
+        self.size = size
+        X, Y = np.meshgrid(np.arange(-size // 2, size // 2), np.arange(-size // 2, size // 2))
+        self.mask = np.reshape((1 + c * (X ** 2 + Y ** 2)) ** (s / 2), (1, 1, size, size, 1))
+        self.tensor_mask = Variable(torch.Tensor(self.mask).cuda())
+
+    @property
+    def dual(self):
+        return Norm(s=-self.s, c=self.c, size=self.size)
+
+    def __repr__(self):
+        return f'Sobolev Norm s {self.s}'
+
+    def __str__(self):
+        return f'Sobolev Norm s {self.s}'
+
+    def __call__(self, tensor):
+        if self.s == 0:
+            return torch.sqrt(torch.sum(tensor ** 2, axis=(1, 2, 3)))
+        else:
+            tensor = embed_tensor_complex(tensor)
+            ft = fft2c(tensor)
+            weighted = ft * self.tensor_mask
+            return torch.sqrt(torch.sum(weighted ** 2, axis=(1, 2, 3, 4)))
 
 
 """
@@ -202,7 +233,6 @@ def tensor_to_complex_np(data):
 
 #### Copyright @Zak
 
-from odl import Operator
 class OperatorFunction(torch.autograd.Function):
 
     """Wrapper of an ODL operator as a ``torch.autograd.Function``.
@@ -383,3 +413,47 @@ class OperatorFunction(torch.autograd.Function):
         if scaling != 1.0:
             result_arr *= scaling
         grad_input = torch.from_numpy(result_arr).to(grad_output.device)
+
+class OperatorModule(torch.nn.Module):
+
+    """Wrapper of an ODL operator as a ``torch.nn.Module``.
+    """
+
+    def __init__(self, operator):
+        """Initialize a new instance."""
+        super(OperatorModule, self).__init__()
+        self.operator = operator
+
+    def forward(self, x):
+        """Compute forward-pass of this module on ``x``.
+        """
+        in_shape = tuple(x.shape)
+        in_ndim = len(in_shape)
+        op_in_shape = self.operator.domain.shape
+        op_in_ndim = len(op_in_shape)
+        if in_ndim <= op_in_ndim or in_shape[-op_in_ndim:] != op_in_shape:
+            shp_str = str(op_in_shape).strip('()')
+            raise ValueError(
+                'input tensor has wrong shape: expected (N, *, {}), got {}'
+                ''.format(shp_str, in_shape)
+            )
+        return OperatorFunction.apply(self.operator, x)
+
+    def __repr__(self):
+        """Return ``repr(self)``."""
+        op_name = self.operator.__class__.__name__
+        op_in_shape = self.operator.domain.shape
+        if len(op_in_shape) == 1:
+            op_in_shape = op_in_shape[0]
+        op_out_shape = self.operator.range.shape
+        if len(op_out_shape) == 1:
+            op_out_shape = op_out_shape[0]
+
+        return '{}({}) ({} -> {})'.format(
+            self.__class__.__name__, op_name, op_in_shape, op_out_shape
+        )
+
+def copy_if_zero_strides(arr):
+    """Workaround for NumPy issue #9165 with 0 in arr.strides."""
+    assert isinstance(arr, np.ndarray)
+    return arr.copy() if 0 in arr.strides else arr
