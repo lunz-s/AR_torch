@@ -237,7 +237,7 @@ class CT(Operator):
         # Wrap the operators as torch modules
         self.operator_t = OperatorModule(self.operator)
         self.fbp_t = OperatorModule(self.fbp)
-        self.adjoint_t = OperatorModule(self.adjoint)
+        self.adjoint_t = OperatorModule(self.adjoint_operator)
 
     def forward(self, x, **kwargs):
         return self.operator(x).asarray()
