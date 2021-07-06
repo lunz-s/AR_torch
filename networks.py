@@ -9,15 +9,45 @@ class ConvenientModel(nn.Module):
     def __init__(self, path):
         super(ConvenientModel, self).__init__()
         self.path = path
+        self.best_performance = -1
+        self.best_performance_attained = 0
+        self.minimal_resave_gap = 200
 
-    def save(self, global_step):
+    def save(self, global_step, performance=None):
         mkdir(self.path)
-        torch.save({'step': global_step, 'model_state_dict': self.state_dict()}, self.path+'{:010d}'.format(global_step))
+        if performance is None:
+            torch.save({
+                'step': global_step,
+                'model_state_dict': self.state_dict(),
+            }, self.path+'{:010d}'.format(global_step))
+        else:
+            if (performance < self.best_performance and (global_step-self.best_performance_attained) >= self.minimal_resave_gap) or self.best_performance == -1:
+                self.best_performance = performance
+                self.best_performance_attained = global_step
+                torch.save({
+                    'step': global_step,
+                    'model_state_dict': self.state_dict(),
+                    'performance': performance
+                }, self.path + 'best_model')
+                print('New best model saved. Performance', performance)
 
-    def load(self, checkpoint=None):
+
+    def load(self, checkpoint=None, optimal=False):
         mkdir(self.path)
         if checkpoint:
             path = self.path + checkpoint
+        elif optimal:
+            if os.path.exists(self.path + 'best_model'):
+                path = self.path + 'best_model'
+                print('Loading optimal savpoint')
+            else:
+                print('No optimal save point found. Defaulting to latest save point.')
+                f = os.listdir(self.path)
+                if f:
+                    path = self.path + sorted(f)[-1]
+                else:
+                    print('No save found')
+                    return 0
         else:
             f = os.listdir(self.path)
             if f:
@@ -26,8 +56,13 @@ class ConvenientModel(nn.Module):
                 print('No save found')
                 return 0
         checkpoint = torch.load(path)
+        if 'performance' in checkpoint.keys():
+            self.best_performance = checkpoint['performance']
+            self.best_performance_attained = checkpoint['step']
+            print('Model loaded. Step', checkpoint['step'], 'Performance', self.best_performance)
+        else:
+            print('Model loaded. Step', checkpoint['step'])
         self.load_state_dict(checkpoint['model_state_dict'])
-        print('Model loaded. Step', checkpoint['step'])
         return checkpoint['step']
 
     def gradient(self, x, get_scalar=False):
@@ -114,7 +149,7 @@ class ResNet(ConvenientModel):
             nn.LeakyReLU(negative_slope=.1),
             nn.Linear(in_features=dense_neurons, out_features=1)
         )
-        self.load()
+        self.load(optimal=True)
 
 
     def forward(self, x):
@@ -125,3 +160,18 @@ class ResNet(ConvenientModel):
 class ConvNet(ResNet):
     name = 'ConvNets'
     blocks = ConvBlock
+
+
+class TV(ConvenientModel):
+    name='TV'
+
+    def load(self, checkpoint=None):
+        pass
+
+    def save(self, global_step):
+        pass
+
+    def forward(self, x):
+        TV =  torch.sum(torch.abs(x[:, :, :, :-1] - x[:, :, :, 1:]), axis=(1,2,3)) + \
+              torch.sum(torch.abs(x[:, :, :-1, :] - x[:, :, 1:, :]), axis=(1,2,3))
+        return torch.mean(TV)

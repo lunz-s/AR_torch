@@ -97,8 +97,10 @@ def solve_variational_problem(x_0, y, n_steps, step_size, lam, tracking=None, x_
         tracker.add_image('Network_Training/Reconstruction', best_recon, global_step)
         tracker.add_image('Network_Training/Ground Truth', torch.clamp(x_gt[0, ...], 0, 1).cpu().numpy(), global_step)
         tracker.add_image('Network_Training/FBP', torch.clamp(x_0[0, ...], 0, 1).cpu().numpy(), global_step)
-
-    return x
+    if tracking == 'BestOnly':
+        return x, best_per
+    else:
+        return x
 
 
 def gradient_penalty(gt, fbp, tracking=False, global_step=None):
@@ -197,13 +199,14 @@ if __name__ == '__main__':
 
             # solve the variational problem
             if i % TRACKING_FREQ == 0:
-                solve_variational_problem(val_fbp, val_y, n_steps=N_STEPS, step_size=STEP_SIZE, lam=LAMBDA, x_gt=val_gt,
+                _, per = solve_variational_problem(val_fbp, val_y, n_steps=N_STEPS, step_size=STEP_SIZE, lam=LAMBDA, x_gt=val_gt,
                                           global_step=global_step, tracking='BestOnly')
+                regulariser.save(global_step, performance=per)
 
             if (i % DECAY_EVERY_NSTEPS) == (DECAY_EVERY_NSTEPS-1):
                 lr_scheduler.step()
 
-            if i % 4001 == 4000:
+            if i % 5001 == 5000:
                 regulariser.save(global_step)
 
             global_step += 1

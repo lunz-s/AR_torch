@@ -132,7 +132,7 @@ class MRI(Operator):
         zeros = (y.new_zeros(y.shape[:-1])).unsqueeze(-1)
         n = torch.cat([noise, zeros], axis=-1)
         max_val = complex_abs(y).max()
-        return y + noise_level*max_val*n
+        return y + (noise_level*max_val*n) * self.mask_torch
 
     def forward_torch(self, x, mask=True):
         '''
